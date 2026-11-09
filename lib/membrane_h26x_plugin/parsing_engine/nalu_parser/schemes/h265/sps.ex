@@ -16,6 +16,14 @@ defmodule Membrane.H265.NALuParser.Schemes.SPS do
     rext: [profile_idc: 4]
   ]
 
+  # Spec-mandated upper bounds of the ue(v) fields that drive the amount of work
+  # or memory below. Exceeding them means the SPS is malformed - raising makes the
+  # NALu parser mark it as erroneous instead of e.g. allocating a 2^(2^32)-sized
+  # integer out of a few crafted bytes.
+  @max_ctb_log2_size_y 6
+  @max_num_short_term_ref_pic_sets 64
+  @max_num_pics 16
+
   @impl true
   def defaults(), do: [chroma_format_idc: 1, separate_colour_plane_flag: 0]
 
@@ -185,6 +193,12 @@ defmodule Membrane.H265.NALuParser.Schemes.SPS do
        do: {:ok, payload, state}
 
   defp st_ref_pic_set(payload, state, _iterators) do
+    ensure_in_bounds!(
+      :num_short_term_ref_pic_sets,
+      state.__local__.num_short_term_ref_pic_sets,
+      @max_num_short_term_ref_pic_sets
+    )
+
     {payload, ref_pic_set} =
       Enum.reduce(0..(state.__local__.num_short_term_ref_pic_sets - 1), {payload, []}, fn idx,
                                                                                           {payload,
@@ -200,6 +214,8 @@ defmodule Membrane.H265.NALuParser.Schemes.SPS do
         if inter_ref_pic_set_prediction_flag == 0 do
           {num_negative_pics, payload} = ExpGolombConverter.to_integer(payload)
           {num_positive_pics, payload} = ExpGolombConverter.to_integer(payload)
+          ensure_in_bounds!(:num_negative_pics, num_negative_pics, @max_num_pics)
+          ensure_in_bounds!(:num_positive_pics, num_positive_pics, @max_num_pics)
 
           {payload, delta_poc_s0_minus1, used_by_curr_pic_s0_flag} =
             read_delta_poc(payload, num_negative_pics)
@@ -341,6 +357,7 @@ defmodule Membrane.H265.NALuParser.Schemes.SPS do
       get_in(state, [:__local__, :log2_diff_max_min_luma_coding_block_size])
 
     ctb_log2_size_y = min_luma_block_size + diff_max_min_luma_block_size + 3
+    ensure_in_bounds!(:ctb_log2_size_y, ctb_log2_size_y, @max_ctb_log2_size_y)
     ctb_size_y = 1 <<< ctb_log2_size_y
 
     pic_width_in_ctbs_y = ceil(pic_width / ctb_size_y)
@@ -404,6 +421,11 @@ defmodule Membrane.H265.NALuParser.Schemes.SPS do
        &Map.merge(&1, %{width: width, height: height, profile: profile})
      )}
   end
+
+  defp ensure_in_bounds!(_name, value, max) when value <= max, do: :ok
+
+  defp ensure_in_bounds!(name, value, max),
+    do: raise("SPS field #{name} is #{value}, exceeding the maximum of #{max}")
 
   defp parse_profile(fields) do
     {profile_name, _constraints_list} =
