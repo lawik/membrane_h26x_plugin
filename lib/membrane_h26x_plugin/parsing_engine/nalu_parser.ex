@@ -3,6 +3,8 @@ defmodule Membrane.H26x.ParsingEngine.NALuParser do
   # A module providing functionality of parsing a stream of binaries, out of which each
   # is a payload of a single NAL unit.
 
+  require Membrane.Logger
+
   alias Membrane.H26x.NALu
   alias Membrane.H26x.ParsingEngine
   alias Membrane.H26x.ParsingEngine.NALuParser.SchemeParser
@@ -12,9 +14,10 @@ defmodule Membrane.H26x.ParsingEngine.NALuParser do
   @type nalu_type :: atom()
 
   @doc """
-  Splits an unprefixed NALu payload into its header and body binaries.
+  Splits an unprefixed NALu payload into its header and body binaries, returning
+  `:error` if the payload is too short to hold the header.
   """
-  @callback get_nalu_header_and_body(binary()) :: {binary(), binary()}
+  @callback get_nalu_header_and_body(binary()) :: {binary(), binary()} | :error
 
   @doc """
   Parses the NALu header binary into its fields, returning them with the updated scheme parser state.
@@ -67,6 +70,10 @@ defmodule Membrane.H26x.ParsingEngine.NALuParser do
   When `payload_prefixed?` is true each input binary is expected to contain one of:
   * prefix defined as the *"Annex B"* in the H26x recommendation document.
   * prefix of size defined in state describing the length of the NALU in bytes, as described in *ISO/IEC 14496-15*.
+
+  Degenerate NALus, too short to hold even the NALu header (e.g. a zero-length
+  NALu in a length-prefixed stream, or two adjacent Annex B start codes), carry
+  no information and are skipped.
   """
   @spec parse_nalus(module(), [binary()], NALu.timestamps(), boolean(), t()) ::
           {[NALu.t()], t()}
@@ -77,13 +84,13 @@ defmodule Membrane.H26x.ParsingEngine.NALuParser do
         payload_prefixed? \\ true,
         state
       ) do
-    Enum.map_reduce(nalus_payloads, state, fn nalu_payload, state ->
+    Enum.flat_map_reduce(nalus_payloads, state, fn nalu_payload, state ->
       parse_nalu(module, nalu_payload, timestamps, payload_prefixed?, state)
     end)
   end
 
   @spec parse_nalu(module(), binary(), NALu.timestamps(), boolean(), t()) ::
-          {NALu.t(), t()}
+          {[NALu.t()], t()}
   defp parse_nalu(module, nalu_payload, timestamps, payload_prefixed?, state) do
     {prefix, unprefixed_nalu_payload} =
       if payload_prefixed? do
@@ -92,8 +99,37 @@ defmodule Membrane.H26x.ParsingEngine.NALuParser do
         {<<>>, nalu_payload}
       end
 
-    {nalu_header, nalu_body} = module.get_nalu_header_and_body(unprefixed_nalu_payload)
+    case module.get_nalu_header_and_body(unprefixed_nalu_payload) do
+      {nalu_header, nalu_body} ->
+        {nalu, state} =
+          do_parse_nalu(
+            module,
+            nalu_header,
+            nalu_body,
+            {prefix, unprefixed_nalu_payload, nalu_payload},
+            timestamps,
+            state
+          )
 
+        {[nalu], state}
+
+      :error ->
+        Membrane.Logger.warning(
+          "Skipping a NALu too short to hold the NALu header: #{inspect(nalu_payload)}"
+        )
+
+        {[], state}
+    end
+  end
+
+  defp do_parse_nalu(
+         module,
+         nalu_header,
+         nalu_body,
+         {prefix, unprefixed_nalu_payload, nalu_payload},
+         timestamps,
+         state
+       ) do
     new_scheme_parser_state = SchemeParser.new(state.scheme_parser_state)
 
     {parsed_fields, scheme_parser_state} =
@@ -189,6 +225,8 @@ defmodule Membrane.H264.NALuParser do
   def get_nalu_header_and_body(<<nalu_header::binary-size(1), nalu_body::binary>>),
     do: {nalu_header, nalu_body}
 
+  def get_nalu_header_and_body(_too_short), do: :error
+
   @impl true
   def parse_nalu_header(nalu_header, state) do
     # Parsing of the header cannot ever fail.
@@ -249,6 +287,8 @@ defmodule Membrane.H265.NALuParser do
   @impl true
   def get_nalu_header_and_body(<<nalu_header::binary-size(2), nalu_body::binary>>),
     do: {nalu_header, nalu_body}
+
+  def get_nalu_header_and_body(_too_short), do: :error
 
   @impl true
   def parse_nalu_header(nalu_header, state) do
