@@ -4,7 +4,9 @@ defmodule Membrane.H26x.ParsingEngine.ParameterSetCache do
   # Tracks the parameter set NALus (VPS/SPS/PPS) of a stream, keyed by their type
   # and id. A parameter set redefined under an already used id replaces the cached
   # one, so the cache always holds only the currently active set per id, in the
-  # order in which the ids first appeared.
+  # order in which the ids first appeared. Parameter sets that failed to parse are
+  # ignored - their fields (including the id) are unknown, so they can neither be
+  # keyed nor used to describe the stream.
 
   alias Membrane.H26x.NALu
 
@@ -21,7 +23,7 @@ defmodule Membrane.H26x.ParsingEngine.ParameterSetCache do
   @spec put(t(), [NALu.t()]) :: t()
   def put(cache, nalus) do
     nalus
-    |> Enum.filter(&parameter_set?/1)
+    |> Enum.filter(&(parameter_set?(&1) and &1.status == :valid))
     |> Enum.reduce(cache, fn new_ps, cache ->
       case Enum.find_index(cache, &(parameter_set_id(&1) == parameter_set_id(new_ps))) do
         nil -> cache ++ [new_ps]

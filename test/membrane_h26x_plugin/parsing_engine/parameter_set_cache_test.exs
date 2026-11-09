@@ -54,5 +54,18 @@ defmodule Membrane.H26x.ParsingEngine.ParameterSetCacheTest do
 
       assert [%NALu{type: :sps, payload: <<7>>}] = cache
     end
+
+    test "parameter sets that failed to parse are ignored" do
+      # an unparsable SPS carries only the header fields, in particular no id
+      broken_sps = %{nalu(:sps, %{nal_unit_type: 7}, <<0x67, 0x42>>) | status: :error}
+
+      assert ParameterSetCache.put(ParameterSetCache.new(), [broken_sps]) == []
+
+      cache = ParameterSetCache.put(ParameterSetCache.new(), [sps(0, <<7>>), broken_sps])
+      assert [%NALu{type: :sps, payload: <<7>>}] = cache
+
+      cache = ParameterSetCache.put(cache, [broken_sps, pps(0, <<1>>)])
+      assert [%NALu{type: :sps, payload: <<7>>}, %NALu{type: :pps, payload: <<1>>}] = cache
+    end
   end
 end

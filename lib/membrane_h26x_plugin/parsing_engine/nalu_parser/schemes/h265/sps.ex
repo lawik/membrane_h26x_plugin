@@ -413,7 +413,8 @@ defmodule Membrane.H265.NALuParser.Schemes.SPS do
         end)
       end)
 
-    if profile_name == nil, do: raise("Cannot read the profile name based on SPS's fields.")
+    # A legal profile_idc missing from the table above must not make the SPS
+    # unparsable - the profile is simply reported as unknown (`nil`).
     profile_name
   end
 end

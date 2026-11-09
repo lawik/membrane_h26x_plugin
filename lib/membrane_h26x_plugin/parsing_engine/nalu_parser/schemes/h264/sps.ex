@@ -39,7 +39,8 @@ defmodule Membrane.H264.NALuParser.Schemes.SPS do
       field: {:level_idc, :u8},
       field: {:seq_parameter_set_id, :ue},
       if:
-        {{&(&1 in [100, 110, 122, 244, 44, 83, 86, 118, 128]), [:profile_idc]},
+        {{&(&1 in [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135]),
+          [:profile_idc]},
          field: {:chroma_format_idc, :ue},
          if: {{&(&1 == 3), [:chroma_format_idc]}, field: {:separate_colour_plane_flag, :u1}},
          field: {:bit_depth_luma_minus8, :ue},
@@ -257,7 +258,8 @@ defmodule Membrane.H264.NALuParser.Schemes.SPS do
         end)
       end)
 
-    if profile_name == nil, do: raise("Cannot read the profile name based on SPS's fields.")
+    # A legal profile_idc missing from the table above must not make the SPS
+    # unparsable - the profile is simply reported as unknown (`nil`).
     profile_name
   end
 end
